@@ -106,8 +106,7 @@ params:
 
 markup:
     highlight:
-        anchorLineNos: true
         codeFences: true
         guessSyntax: true
         lineNos: true
-        style: monokai
+        style: friendly
