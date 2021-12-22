@@ -86,7 +86,7 @@ params:
     - name: github
       url: "https://github.com/qtc-de"
     - name: linkedin
-      url: "TODO"
+      url: "https://www.linkedin.com/in/tobias-neitzel-9b5998219"
     - name: RSS
       url: "/posts/index.xml"
 
