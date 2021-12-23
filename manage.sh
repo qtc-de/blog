@@ -5,12 +5,18 @@ function usage() {
 }
 
 function adjust_theme() {
-    sed -i '3i \ \ \ \ {{ partial "social_icons.html" $.Site.Params.socialIcons }}' \
+    sed -i '3i \ \ \ \ {{ if ne .IsHome true }}' \
+    ./themes/PaperMod/layouts/partials/footer.html
+
+    sed -i '4i \ \ \ \ \ \ {{ partial "social_icons.html" $.Site.Params.socialIcons }}' \
+    ./themes/PaperMod/layouts/partials/footer.html
+
+    sed -i '5i \ \ \ \ {{ end }}' \
     ./themes/PaperMod/layouts/partials/footer.html
 }
 
 function reset_theme() {
-    sed -i '3d' ./themes/PaperMod/layouts/partials/footer.html
+    sed -i '3,5d' ./themes/PaperMod/layouts/partials/footer.html
 }
 
 if [ $# -eq 1 ]; then
