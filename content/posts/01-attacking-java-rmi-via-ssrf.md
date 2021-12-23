@@ -16,6 +16,7 @@ categories:
 - ssrf
 
 ShowToc: True
+autonumbering: true
 cover:
     image: "/img/01-rmi-ssrf/01-intro.png"
     alt: "Attacking Java RMI via SSRF"
@@ -32,7 +33,7 @@ like *redis* databases. In this blog post we discuss the
 services can be targeted via *SSRF*.
 
 
-### The SSRFibility of Java RMI
+## The SSRFibility of Java RMI
 
 ---
 
@@ -87,7 +88,7 @@ But this is not the case as the *RMI protocol* is, like *HTTP*, a stateless prot
 there is only a loosely coupling between local objects and remote services. But we go ahead
 of ourselves as we should start with the *RMI registry*.
 
-#### The RMI Registry
+### The RMI Registry
 
 The *RMI registry* is a naming service that is often used to make *RMI* services available
 on the network. In order to connect to a *remote object*, clients usually need a certain
@@ -110,12 +111,12 @@ Hence, to communicate with the *RMI registry*, only the IP address and the TCP p
 This makes the *RMI registry* an easier target for *SSRF* attacks and we discuss it first before
 going over to non well known *RMI services*.
 
-#### The Java RMI Protocol
+### The Java RMI Protocol
 
 Whether or not the *RMI registry* can now be targeted by *SSRF* attacks depends on the structure of the
 *RMI* protocol. In the following diagram I tried to visualize how a typical *RMI* communication looks like:
 
-![Java RMI Protocol](/img/01-rmi-ssrf/02-java-rmi-protocol.png)
+{{< figure src="/img/01-rmi-ssrf/02-java-rmi-protocol.png" title="Java RMI Protocol" >}}
 
 The typical *RMI* communication consists out of a *handshake* and one or more *method calls*. During the
 *handshake*, some static data and information on the server and client host are exchanged. It is worth noting
@@ -134,7 +135,7 @@ the underlying *TCP* stream. This allows the client to send all required data ri
 for any server responses. The following diagram shows the *RMI* protocol again, but this time how it would be
 utilized during an *SSRF* attack:
 
-![Java RMI Protocol During SSRF](/img/01-rmi-ssrf/03-java-rmi-protocol-ssrf.png)
+{{< figure src="/img/01-rmi-ssrf/03-java-rmi-protocol-ssrf.png" title="Java RMI Protocol during SSRF" >}}
 
 Another problem we have not talked about so far are data types. It should be obvious that a basic *HTTP* based
 *SSRF* vulnerability cannot be utilized to perform *SSRF* attacks on *RMI* services. Already the first few bytes
@@ -144,7 +145,7 @@ to be allowed, which causes problems even with *gopher* based *SSRF* attacks on 
 However, when this condition is met and you can send arbitrary data to the *RMI* service, you can dispatch
 calls as with a direct connection.
 
-#### The ObjID Problem
+### The ObjID Problem
 
 An attack as demonstrated in *figure 2* requires the client to know all data that needs to be send to the *RMI server*
 in advance. This is possible for well known *RMI* services with a fixed ``ObjID`` value like the *RMI registry* (``ObjID = 0``),
@@ -170,8 +171,49 @@ For this to work we obviously need an *SSRF* vulnerability that returns data obt
 need to allow arbitrary bytes within the returned data, including null bytes. *SSRF* vulnerabilities with these properties are extremely
 rare, but when all conditions are met, you can consume any *RMI* service as with a direct connection.
 
+### SingleOpProtocol vs StreamProtocol
 
-### Attacking the RMI Registry
+Readers that are familiar with the internals of *Java RMI* may ask why we only talked about the ``StreamProtocol``
+so far. This will be explained within this section. It is not required to understand the rest of the article, so
+feel free to skip.
+
+*Java RMI* supports currently two different protocol types: ``StreamProtocol`` and ``SingleOpProtocol`` (artifacts of the
+``MultiplexProtocol`` are still contained within the sources, but all connections using this protocol are simply rejected).
+The protocol variant that the client wants to use is contained within the first few bytes that are sent by the client (``protocol`` field).
+In the protocol description above, we only looked at the ``StreamProtocol``, which uses a handshake and allows for multiple
+*RMI calls* within one communication channel.
+
+When using the ``SingleOpProtocol``, there is no handshake and the incoming *RMI call* starts directly. Furthermore, only
+a single call can be dispatched within a communication channel. This results in the following diagram for the ``SingleOpProtocol``:
+
+{{< figure src="/img/01-rmi-ssrf/04-java-rmi-single-op-protocol.png" title="Single Operation Protocol" >}}
+
+From the *SSRF* perspective, the ``SingleOpProtocol`` seems to be a much better way to launch a successful attack. That being said,
+even when using low level *Java RMI* functions, the protocol type is not modifiable. It is set within the
+[TCPChannel class](https://github.com/openjdk/jdk/blob/6765f902505fbdd02f25b599f942437cd805cad1/src/java.rmi/share/classes/sun/rmi/transport/tcp/TCPChannel.java#L226)
+and the ``StreamProtocol`` is always selected when the underlying connection is *reusable*. The underlying connection
+is always an instance of the [TCPConnection class](https://github.com/openjdk/jdk/blob/ad1dc9c2ae5463363aff20072a3f2ca4ea23acd2/src/java.rmi/share/classes/sun/rmi/transport/tcp/TCPConnection.java#L117),
+and contains the following function definition:
+
+```java
+public boolean isReusable()
+{
+    return true;
+}
+```
+
+This makes it difficult to modify the protocol type, even when using reflection. In the following chapters, we use
+*remote-method-guesser* [\[2\]](#references) to perform *SSRF* attacks. The tool is written in *Java* and consumes the
+low level *Java RMI* functions. Hence, *SSRF* payloads created by the tool are always using the ``StreamProtocol``.
+
+When starting to work on *SSRF* based *RMI* attacks, I expected the ``StreamProtocol`` to cause troubles. Since the protocol
+can process multiple *RMI* calls, connections are usually kept alive and do not terminate. This could cause idle connections
+when the service vulnerable to *SSRF* waits for a response from the *RMI* endpoint. In practice, however, I did not
+experienced such idle connections and the *SSRF* request did always return immediately. I guess it depends on the type of *SSRF*
+vulnerability and some cases may require the usage of the ``SingleOpProtocol``.
+
+
+## Attacking the RMI Registry
 
 To demonstrate the *SSRFibility* of the *Java RMI* protocol, we will now attack an *RMI registry* endpoint using a
 webapplication that is vulnerable to *SSRF* attacks. In order to make this as comfortable as possible, we use *remote-method-guesser*
@@ -274,10 +316,10 @@ uid=0(root) gid=0(root) groups=0(root)
 We successfully used a blind *SSRF* vulnerability to attack a vulnerable *RMI registry*. The following gif
 shows all of the above mentioned steps in action:
 
-![RMI SSRF Example](https://tneitzel.eu/73201a92878c0aba7c3419b7403ab604/ssrf.gif)
+{{< figure src="https://tneitzel.eu/73201a92878c0aba7c3419b7403ab604/ssrf.gif" title="RMI Registry SSRF Attack" >}}
 
 
-### Attacking Custom RMI Services
+## Attacking Custom RMI Services
 
 The ssrf-server [3](https://github.com/qtc-de/remote-method-guesser/pkgs/container/remote-method-guesser%2Frmg-ssrf-server) from
 the *remote-method-guesser* repository runs one custom *RMI service* that is, like the *RMI registry*, only reachable from localhost.
@@ -388,7 +430,7 @@ curl_user:x:100:101:Linux User,,,:/home/curl_user:/sbin/nologin
 ```
 
 
-### Attacking JMX via *SSRF*
+## Attacking JMX via *SSRF*
 
 ----
 
@@ -585,7 +627,7 @@ rmg call localhost ${JMX_PORT} "${ARG_EXEC}" --signature "${SIG_INVOKE}" --objid
 ```
 
 
-### Mitigations
+## Mitigations
 
 ----
 
@@ -609,7 +651,7 @@ few configuration changes, none of the above discussed attacks would have worked
    deserialized (*deserialization gadgets*).
 
 
-### Conclusion
+## Conclusion
 
 ----
 
@@ -624,7 +666,7 @@ If both of these conditions are satisfied, a backend *RMI service* can be consum
 using the *SSRF* vulnerability. If you ever encounter such a service, I would love to hear your experiences regarding
 *SSRF* based *RMI* attacks :)
 
-### References
+## References
 
 ----
 
