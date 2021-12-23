@@ -36,4 +36,6 @@ $ ./manage.sh deploy
 
 This blog is powered by [hugo](https://github.com/gohugoio/hugo) and the [hugo-PaperMod](
 https://github.com/adityatelange/hugo-PaperMod) theme. Credits also go to my colleague
-[Konstantin](https://twitter.com/kwnypwny) who inspired me to create this blog.
+[Konstantin](https://twitter.com/kwnypwny) who inspired me to create this blog and to
+Ashish Lahoti for [his explanation](https://codingnconcepts.com/hugo/auto-number-headings-hugo/)
+on how to implement auto numbered headings using CSS.
