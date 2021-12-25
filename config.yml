@@ -56,6 +56,7 @@ params:
   ShowCodeCopyButtons: true
 
   assets:
+    disableHLJS: true
     favicon: "/img/favicon.ico"
     favicon16x16: "/img/favicon.ico"
     favicon32x32: "/img/favicon.ico"
@@ -108,5 +109,5 @@ markup:
     highlight:
         codeFences: true
         guessSyntax: true
-        lineNos: true
         style: friendly
+        noClasses: true
