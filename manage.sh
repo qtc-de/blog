@@ -6,17 +6,6 @@ function usage() {
 
 function adjust_theme() {
 
-    # prevent social icons being displayed twice on home
-
-    sed -i '3i \ \ \ \ {{ if ne .IsHome true }}' \
-    ./themes/PaperMod/layouts/partials/footer.html
-
-    sed -i '4i \ \ \ \ \ \ {{ partial "social_icons.html" $.Site.Params.socialIcons }}' \
-    ./themes/PaperMod/layouts/partials/footer.html
-
-    sed -i '5i \ \ \ \ {{ end }}' \
-    ./themes/PaperMod/layouts/partials/footer.html
-
     # center figure captions
     echo -e "figcaption {\n  text-align: center;\n}" > ./themes/PaperMod/assets/css/extended/figure.css
 
@@ -44,7 +33,6 @@ EOF
 }
 
 function reset_theme() {
-    sed -i '3,5d' ./themes/PaperMod/layouts/partials/footer.html
     sed -i '3d' ./themes/PaperMod/layouts/_default/single.html
     sed -i '3i<article class="post-single">' \
     ./themes/PaperMod/layouts/_default/single.html

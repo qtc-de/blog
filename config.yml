@@ -54,6 +54,7 @@ params:
   ShowShareButtons: true
   ShowPostNavLinks: true
   ShowCodeCopyButtons: true
+  SocialIconsFooter: true
 
   assets:
     disableHLJS: true
