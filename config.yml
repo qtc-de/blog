@@ -93,7 +93,7 @@ params:
       url: "/posts/index.xml"
 
   editPost:
-    URL: "https://github.com/qtc-de/blog/tree/main/content/"
+    URL: "https://github.com/qtc-de/blog/tree/main/content"
     Text: "Suggest Changes"
     appendFilePath: true
 
