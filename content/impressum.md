@@ -10,21 +10,22 @@ aliases:
 
 **Angaben gemäß § 5 TMG**
 
-Tobias Neitzel
-c/o Werneburg Internet Marketing und Publikations-Service
-Philipp-Kühner-Straße 2
+Tobias Neitzel  
+c/o Werneburg Internet Marketing und Publikations-Service  
+Philipp-Kühner-Straße 2  
 99817 Eisenach
 
-**Vertreten durch:**
+**Vertreten durch:**  
 Tobias Neitzel
 
-**Kontakt:**
+**Kontakt:**  
 E-Mail: blog@tneitzel.eu
 
 **Verantwortlich für den Inhalt nach § 55 Abs. 2 RStV:**
-Tobias Neitzel
-c/o Werneburg Internet Marketing und Publikations-Service
-Philipp-Kühner-Straße 2
+
+Tobias Neitzel  
+c/o Werneburg Internet Marketing und Publikations-Service  
+Philipp-Kühner-Straße 2  
 99817 Eisenach
 
 **Haftungsausschluss:**
@@ -71,7 +72,7 @@ Bei Bekanntwerden von Rechtsverletzungen werden wir derartige Inhalte umgehend e
 
 **Webseiten**
 
-[tneitzel.eu](https://tneitzel.eu)
+[tneitzel.eu](https://tneitzel.eu)  
 [blog.tneitzel.eu](https://blog.tneitzel.eu)
 
 ----
